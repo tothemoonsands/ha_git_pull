@@ -6,7 +6,6 @@
 CONFIG_PATH=/data/options.json
 HOME=~
 
-DEPLOYMENT_KEY=$(bashio::config 'deployment_key')
 DEPLOYMENT_KEY_PROTOCOL=$(bashio::config 'deployment_key_protocol')
 DEPLOYMENT_USER=$(bashio::config 'deployment_user')
 DEPLOYMENT_PASSWORD=$(bashio::config 'deployment_password')
@@ -19,104 +18,341 @@ AUTO_RESTART=$(bashio::config 'auto_restart')
 RESTART_IGNORED_FILES=$(bashio::config 'restart_ignore | join(" ")')
 REPEAT_ACTIVE=$(bashio::config 'repeat.active')
 REPEAT_INTERVAL=$(bashio::config 'repeat.interval')
-################
+DEBUG_MODE=$(bashio::config 'debug')
 
-#### functions ####
-function add-ssh-key {
-    bashio::log.info "[Info] Start adding SSH key"
-    mkdir -p ~/.ssh
+SSH_PERSIST_DIR="/data/ssh"
+SSH_RUNTIME_DIR="${HOME}/.ssh"
+SSH_KEY_PATH="${SSH_PERSIST_DIR}/id_${DEPLOYMENT_KEY_PROTOCOL}"
+SSH_KNOWN_HOSTS_PATH="${SSH_PERSIST_DIR}/known_hosts"
+ASKPASS_SCRIPT="/tmp/git-askpass.sh"
+
+REPO_PROTOCOL=""
+REPO_HOST=""
+REPO_PATH=""
+
+function trim {
+    local value="$1"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf '%s' "$value"
+}
+
+function lower {
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+function redact-secrets {
+    local input="$1"
+    printf '%s' "$input" \
+        | sed -E 's#(https?://)[^/@:]+:[^@/]+@#\1***:***@#g; s#(https?://)[^/@]+@#\1***@#g'
+}
+
+function log-debug {
+    if [ "$DEBUG_MODE" = "true" ]; then
+        bashio::log.info "[Debug] $1"
+    fi
+}
+
+function parse-repository-url {
+    local url
+    local rest
+    local host_path
+    local at_part
+    local host_part
+    local path_part
+
+    url=$(trim "$1")
+    REPO_PROTOCOL=""
+    REPO_HOST=""
+    REPO_PATH=""
+
+    if [[ "$url" =~ ^([a-zA-Z][a-zA-Z0-9+.-]*)://(.+)$ ]]; then
+        REPO_PROTOCOL=$(lower "${BASH_REMATCH[1]}")
+        rest="${BASH_REMATCH[2]}"
+        rest="${rest#*@}"
+        host_path="${rest%%\?*}"
+        REPO_HOST="${host_path%%/*}"
+        REPO_PATH="${host_path#*/}"
+    elif [[ "$url" =~ ^([^@]+@)?([^:]+):(.+)$ ]]; then
+        REPO_PROTOCOL="ssh"
+        at_part="${BASH_REMATCH[1]}"
+        host_part="${BASH_REMATCH[2]}"
+        path_part="${BASH_REMATCH[3]}"
+        REPO_HOST="${host_part}"
+        REPO_PATH="${path_part}"
+        if [ -n "$at_part" ]; then
+            REPO_HOST="${host_part}"
+        fi
+    fi
+
+    REPO_HOST=$(lower "${REPO_HOST}")
+    REPO_PATH="${REPO_PATH#/}"
+    REPO_PATH="${REPO_PATH%.git}"
+    REPO_PATH="${REPO_PATH%/}"
+}
+
+function normalize-repository-url {
+    local url="$1"
+    parse-repository-url "$url"
+
+    if [ -n "$REPO_HOST" ] && [ -n "$REPO_PATH" ]; then
+        printf '%s/%s' "$REPO_HOST" "$(lower "$REPO_PATH")"
+        return
+    fi
+
+    printf '%s' "$(lower "$(trim "$url")")"
+}
+
+function ensure-ssh-layout {
+    mkdir -p "$SSH_PERSIST_DIR" "$SSH_RUNTIME_DIR"
+    chmod 700 "$SSH_PERSIST_DIR" "$SSH_RUNTIME_DIR"
+
+    touch "$SSH_KNOWN_HOSTS_PATH"
+    chmod 600 "$SSH_KNOWN_HOSTS_PATH"
+    ln -sf "$SSH_KNOWN_HOSTS_PATH" "${SSH_RUNTIME_DIR}/known_hosts"
 
     (
         echo "Host *"
-        echo "    StrictHostKeyChecking no"
-    ) > ~/.ssh/config
+        echo "    BatchMode yes"
+        echo "    StrictHostKeyChecking yes"
+        echo "    UserKnownHostsFile ${SSH_KNOWN_HOSTS_PATH}"
+    ) > "${SSH_RUNTIME_DIR}/config"
+    chmod 600 "${SSH_RUNTIME_DIR}/config"
+}
 
-    bashio::log.info "[Info] Setup deployment_key on id_${DEPLOYMENT_KEY_PROTOCOL}"
-    rm -f "${HOME}/.ssh/id_${DEPLOYMENT_KEY_PROTOCOL}"
-    while read -r line; do
-        echo "$line" >> "${HOME}/.ssh/id_${DEPLOYMENT_KEY_PROTOCOL}"
-    done <<< "$DEPLOYMENT_KEY"
+function get-deployment-key-raw {
+    local key_type
+    local key_length
+    local key_value
 
-    chmod 600 "${HOME}/.ssh/config"
-    chmod 600 "${HOME}/.ssh/id_${DEPLOYMENT_KEY_PROTOCOL}"
+    key_type=$(bashio::config 'deployment_key | type')
+
+    case "$key_type" in
+        array)
+            key_length=$(bashio::config 'deployment_key | length')
+            if [ "$key_length" -eq 0 ]; then
+                return
+            fi
+            key_value=$(bashio::config 'deployment_key | join("\n")')
+            printf '%s' "$key_value"
+            ;;
+        string)
+            key_value=$(bashio::config 'deployment_key')
+            key_value=$(trim "$key_value")
+            if [ -n "$key_value" ]; then
+                printf '%s' "$key_value"
+            fi
+            ;;
+        *)
+            ;;
+    esac
+}
+
+function normalize-deployment-key {
+    local raw="$1"
+    local cleaned
+    local begin_marker
+    local end_marker
+    local body
+    local compact_body
+    local wrapped_body
+
+    raw=$(trim "$raw")
+    if [ -z "$raw" ]; then
+        return 1
+    fi
+
+    cleaned=$(printf '%s' "$raw" | tr -d '\r')
+    cleaned=$(printf '%s' "$cleaned" \
+        | sed -E 's/(-----BEGIN [A-Z0-9 ]+ PRIVATE KEY-----)/\n\1\n/g; s/(-----END [A-Z0-9 ]+ PRIVATE KEY-----)/\n\1\n/g')
+
+    begin_marker=$(printf '%s\n' "$cleaned" | grep -m1 -E '^-----BEGIN [A-Z0-9 ]+ PRIVATE KEY-----$')
+    end_marker=$(printf '%s\n' "$cleaned" | grep -m1 -E '^-----END [A-Z0-9 ]+ PRIVATE KEY-----$')
+
+    if [ -z "$begin_marker" ] || [ -z "$end_marker" ]; then
+        return 1
+    fi
+
+    body=$(printf '%s\n' "$cleaned" \
+        | awk '
+            /^-----BEGIN [A-Z0-9 ]+ PRIVATE KEY-----$/ { in_body=1; next }
+            /^-----END [A-Z0-9 ]+ PRIVATE KEY-----$/ { in_body=0; next }
+            in_body { print }
+        ')
+
+    compact_body=$(printf '%s' "$body" | tr -d ' \t\n')
+    if [ -z "$compact_body" ]; then
+        return 1
+    fi
+
+    if ! printf '%s' "$compact_body" | grep -Eq '^[A-Za-z0-9+/=]+$'; then
+        return 1
+    fi
+
+    wrapped_body=$(printf '%s' "$compact_body" | fold -w 70)
+    printf '%s\n%s\n%s\n' "$begin_marker" "$wrapped_body" "$end_marker"
+}
+
+function ensure-known-host-entry {
+    local host="$1"
+    local scan_types="ed25519"
+    local tmp_file
+
+    if [ -z "$host" ]; then
+        return
+    fi
+
+    if ssh-keygen -F "$host" -f "$SSH_KNOWN_HOSTS_PATH" >/dev/null 2>&1; then
+        log-debug "known_hosts already has entry for ${host}"
+        return
+    fi
+
+    if [ "$host" = "github.com" ]; then
+        scan_types="ed25519,rsa,ecdsa"
+    fi
+
+    bashio::log.info "[Info] Fetching SSH host key for ${host}"
+    if ! ssh-keyscan -T 15 -t "$scan_types" "$host" >> "$SSH_KNOWN_HOSTS_PATH" 2>/dev/null; then
+        bashio::exit.nok "[Error] Unable to fetch SSH host key for ${host}. Add it manually to ${SSH_KNOWN_HOSTS_PATH} and retry."
+    fi
+
+    tmp_file=$(mktemp)
+    sort -u "$SSH_KNOWN_HOSTS_PATH" > "$tmp_file"
+    mv "$tmp_file" "$SSH_KNOWN_HOSTS_PATH"
+    chmod 600 "$SSH_KNOWN_HOSTS_PATH"
+}
+
+function setup-ssh-auth {
+    local raw_key
+    local normalized_key
+    local tmp_key
+
+    parse-repository-url "$REPOSITORY"
+    if [ "$REPO_PROTOCOL" != "ssh" ]; then
+        unset GIT_SSH_COMMAND
+        return
+    fi
+
+    ensure-ssh-layout
+
+    raw_key=$(get-deployment-key-raw)
+    if [ -z "$raw_key" ]; then
+        bashio::exit.nok "[Error] SSH repository detected but deployment_key is empty. Configure deployment_key as a list of lines or a block string."
+    fi
+
+    normalized_key=$(normalize-deployment-key "$raw_key") || {
+        bashio::exit.nok "[Error] deployment_key format is invalid. Use BEGIN/END private key markers and preserve the key body as list lines or block scalar text."
+    }
+
+    tmp_key=$(mktemp)
+    printf '%s' "$normalized_key" > "$tmp_key"
+    chmod 600 "$tmp_key"
+
+    if ! ssh-keygen -y -f "$tmp_key" >/dev/null 2>&1; then
+        rm -f "$tmp_key"
+        bashio::exit.nok "[Error] deployment_key failed validation (ssh-keygen). Ensure Home Assistant did not fold or alter key formatting."
+    fi
+
+    mv "$tmp_key" "$SSH_KEY_PATH"
+    chmod 600 "$SSH_KEY_PATH"
+    ln -sf "$SSH_KEY_PATH" "${SSH_RUNTIME_DIR}/id_${DEPLOYMENT_KEY_PROTOCOL}"
+
+    ensure-known-host-entry "$REPO_HOST"
+
+    export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${SSH_KNOWN_HOSTS_PATH} -o IdentitiesOnly=yes -i ${SSH_KEY_PATH}"
+}
+
+function setup-https-auth {
+    if [ -f "$ASKPASS_SCRIPT" ]; then
+        rm -f "$ASKPASS_SCRIPT"
+    fi
+    unset GIT_ASKPASS GIT_TERMINAL_PROMPT GIT_ASKPASS_USERNAME GIT_ASKPASS_PASSWORD
+
+    parse-repository-url "$REPOSITORY"
+    if [ "$REPO_PROTOCOL" != "https" ] && [ "$REPO_PROTOCOL" != "http" ]; then
+        return
+    fi
+
+    if [ -z "$DEPLOYMENT_USER" ] || [ -z "$DEPLOYMENT_PASSWORD" ]; then
+        bashio::log.info "[Info] HTTPS repository detected without deployment_user/deployment_password; using git default credential flow."
+        return
+    fi
+
+    cat > "$ASKPASS_SCRIPT" << 'EOF'
+#!/usr/bin/env sh
+case "$1" in
+  *sername*) printf '%s\n' "$GIT_ASKPASS_USERNAME" ;;
+  *assword*) printf '%s\n' "$GIT_ASKPASS_PASSWORD" ;;
+  *) printf '\n' ;;
+esac
+EOF
+    chmod 700 "$ASKPASS_SCRIPT"
+
+    export GIT_ASKPASS="$ASKPASS_SCRIPT"
+    export GIT_TERMINAL_PROMPT=0
+    export GIT_ASKPASS_USERNAME="$DEPLOYMENT_USER"
+    export GIT_ASKPASS_PASSWORD="$DEPLOYMENT_PASSWORD"
+}
+
+function log-debug-state {
+    local remote_lines
+    local line
+    local key_valid="false"
+    local host_status="missing"
+
+    if [ "$DEBUG_MODE" != "true" ]; then
+        return
+    fi
+
+    parse-repository-url "$REPOSITORY"
+    log-debug "Repository protocol: ${REPO_PROTOCOL:-unknown}"
+    log-debug "Repository host: ${REPO_HOST:-unknown}"
+    log-debug "Repository path: ${REPO_PATH:-unknown}"
+    log-debug "SSH key path: ${SSH_KEY_PATH}"
+
+    if [ -f "$SSH_KEY_PATH" ] && ssh-keygen -y -f "$SSH_KEY_PATH" >/dev/null 2>&1; then
+        key_valid="true"
+    fi
+    log-debug "SSH key validates: ${key_valid}"
+
+    if [ -n "$REPO_HOST" ] && [ -f "$SSH_KNOWN_HOSTS_PATH" ] \
+        && ssh-keygen -F "$REPO_HOST" -f "$SSH_KNOWN_HOSTS_PATH" >/dev/null 2>&1; then
+        host_status="present"
+    fi
+    log-debug "known_hosts entry for host: ${host_status}"
+
+    if git rev-parse --is-inside-work-tree &>/dev/null; then
+        remote_lines=$(git remote -v 2>/dev/null || true)
+        while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            log-debug "git remote: $(redact-secrets "$line")"
+        done <<< "$remote_lines"
+    fi
 }
 
 function git-clone {
-    # create backup
-    BACKUP_LOCATION="/tmp/config-$(date +%Y-%m-%d_%H-%M-%S)"
-    bashio::log.info "[Info] Backup configuration to $BACKUP_LOCATION"
+    local backup_location
 
-    mkdir "${BACKUP_LOCATION}" || bashio::exit.nok "[Error] Creation of backup directory failed"
-    cp -rf /config/* "${BACKUP_LOCATION}" || bashio::exit.nok "[Error] Copy files to backup directory failed"
+    backup_location="/tmp/config-$(date +%Y-%m-%d_%H-%M-%S)"
+    bashio::log.info "[Info] Backup configuration to ${backup_location}"
 
-    # remove config folder content
+    mkdir "$backup_location" || bashio::exit.nok "[Error] Creation of backup directory failed"
+    cp -rf /config/* "$backup_location" || bashio::exit.nok "[Error] Copy files to backup directory failed"
+
     rm -rf /config/{,.[!.],..?}* || bashio::exit.nok "[Error] Clearing /config failed"
 
-    # git clone
     bashio::log.info "[Info] Start git clone"
-    git clone "$REPOSITORY" /config || bashio::exit.nok "[Error] Git clone failed"
+    git clone "$REPOSITORY" /config || bashio::exit.nok "[Error] Git clone failed for $(redact-secrets "$REPOSITORY")"
 
-    # try to copy non yml files back
-    cp "${BACKUP_LOCATION}" "!(*.yaml)" /config 2>/dev/null
-
-    # try to copy secrets file back
-    cp "${BACKUP_LOCATION}/secrets.yaml" /config 2>/dev/null
-}
-
-function check-ssh-key {
-if [ -n "$DEPLOYMENT_KEY" ]; then
-    bashio::log.info "Check SSH connection"
-    IFS=':' read -ra GIT_URL_PARTS <<< "$REPOSITORY"
-    # shellcheck disable=SC2029
-    DOMAIN="${GIT_URL_PARTS[0]}"
-    if OUTPUT_CHECK=$(ssh -T -o "StrictHostKeyChecking=no" -o "BatchMode=yes" "$DOMAIN" 2>&1) || { [[ $DOMAIN = *"@github.com"* ]] && [[ $OUTPUT_CHECK = *"You've successfully authenticated"* ]]; }; then
-        bashio::log.info "[Info] Valid SSH connection for $DOMAIN"
-    else
-        bashio::log.warning "[Warn] No valid SSH connection for $DOMAIN"
-        add-ssh-key
-    fi
-fi
-}
-
-function setup-user-password {
-if [ -n "$DEPLOYMENT_USER" ]; then
-    cd /config || return
-    bashio::log.info "[Info] setting up credential.helper for user: ${DEPLOYMENT_USER}"
-    git config --system credential.helper 'store --file=/tmp/git-credentials'
-
-    # Extract the hostname from repository
-    h="$REPOSITORY"
-
-    # Extract the protocol
-    proto=${h%%://*}
-
-    # Strip the protocol
-    h="${h#*://}"
-
-    # Strip username and password from URL
-    h="${h#*:*@}"
-    h="${h#*@}"
-
-    # Strip the tail of the URL
-    h=${h%%/*}
-
-    # Format the input for git credential commands
-    cred_data="\
-protocol=${proto}
-host=${h}
-username=${DEPLOYMENT_USER}
-password=${DEPLOYMENT_PASSWORD}
-"
-
-    # Use git commands to write the credentials to ~/.git-credentials
-    bashio::log.info "[Info] Saving git credentials to /tmp/git-credentials"
-    # shellcheck disable=SC2259
-    git credential fill | git credential approve <<< "$cred_data"
-fi
+    cp "${backup_location}" "!(*.yaml)" /config 2>/dev/null
+    cp "${backup_location}/secrets.yaml" /config 2>/dev/null
 }
 
 function git-synchronize {
-    # is /config a local git repo?
+    local current_git_remote_url
+    local current_normalized
+    local desired_normalized
+
     if ! git rev-parse --is-inside-work-tree &>/dev/null; then
         bashio::log.warning "[Warn] Git repository doesn't exist"
         git-clone
@@ -124,28 +360,40 @@ function git-synchronize {
     fi
 
     bashio::log.info "[Info] Local git repository exists"
-    # Is the local repo set to the correct origin?
-    CURRENTGITREMOTEURL=$(git remote get-url --all "$GIT_REMOTE" | head -n 1)
-    if [ "$CURRENTGITREMOTEURL" != "$REPOSITORY" ]; then
-        bashio::exit.nok "[Error] git origin does not match $REPOSITORY!";
-        return
+
+    current_git_remote_url=$(git remote get-url --all "$GIT_REMOTE" | head -n 1)
+    if [ -z "$current_git_remote_url" ]; then
+        bashio::exit.nok "[Error] Unable to read git remote ${GIT_REMOTE}"
     fi
 
-    bashio::log.info "[Info] Git origin is correctly set to $REPOSITORY"
+    current_normalized=$(normalize-repository-url "$current_git_remote_url")
+    desired_normalized=$(normalize-repository-url "$REPOSITORY")
+
+    if [ "$current_normalized" != "$desired_normalized" ]; then
+        bashio::log.warning "[Warn] git remote mismatch detected"
+        bashio::log.warning "[Warn] current: $(redact-secrets "$current_git_remote_url")"
+        bashio::log.warning "[Warn] desired: $(redact-secrets "$REPOSITORY")"
+        bashio::log.info "[Info] Attempting to update remote ${GIT_REMOTE} to desired repository"
+        git remote set-url "$GIT_REMOTE" "$REPOSITORY" \
+            || bashio::exit.nok "[Error] Failed to update remote ${GIT_REMOTE}. Please verify repository settings."
+    else
+        bashio::log.info "[Info] Git origin is correctly set to $(redact-secrets "$REPOSITORY")"
+    fi
+
     OLD_COMMIT=$(git rev-parse HEAD)
 
-    # Always do a fetch to update repos
     bashio::log.info "[Info] Start git fetch..."
-    git fetch "$GIT_REMOTE" "$GIT_BRANCH" || bashio::exit.nok "[Error] Git fetch failed";
-
-    # Prune if configured
-    if [ "$GIT_PRUNE" == "true" ]
-    then
-        bashio::log.info "[Info] Start git prune..."
-        git prune || bashio::exit.nok "[Error] Git prune failed";
+    if [ -z "$GIT_BRANCH" ]; then
+        git fetch "$GIT_REMOTE" || bashio::exit.nok "[Error] Git fetch failed"
+    else
+        git fetch "$GIT_REMOTE" "$GIT_BRANCH" || bashio::exit.nok "[Error] Git fetch failed"
     fi
 
-    # Do we switch branches?
+    if [ "$GIT_PRUNE" == "true" ]; then
+        bashio::log.info "[Info] Start git prune..."
+        git prune || bashio::exit.nok "[Error] Git prune failed"
+    fi
+
     GIT_CURRENT_BRANCH=$(git rev-parse --symbolic-full-name --abbrev-ref HEAD)
     if [ -z "$GIT_BRANCH" ] || [ "$GIT_BRANCH" == "$GIT_CURRENT_BRANCH" ]; then
         bashio::log.info "[Info] Staying on currently checked out branch: $GIT_CURRENT_BRANCH..."
@@ -155,15 +403,14 @@ function git-synchronize {
         GIT_CURRENT_BRANCH=$(git rev-parse --symbolic-full-name --abbrev-ref HEAD)
     fi
 
-    # Pull or reset depending on user preference
     case "$GIT_COMMAND" in
         pull)
             bashio::log.info "[Info] Start git pull..."
-            git pull || bashio::exit.nok "[Error] Git pull failed";
+            git pull || bashio::exit.nok "[Error] Git pull failed"
             ;;
         reset)
             bashio::log.info "[Info] Start git reset..."
-            git reset --hard "$GIT_REMOTE"/"$GIT_CURRENT_BRANCH" || bashio::exit.nok "[Error] Git reset failed";
+            git reset --hard "$GIT_REMOTE"/"$GIT_CURRENT_BRANCH" || bashio::exit.nok "[Error] Git reset failed"
             ;;
         *)
             bashio::exit.nok "[Error] Git command is not set correctly. Should be either 'reset' or 'pull'"
@@ -172,8 +419,12 @@ function git-synchronize {
 }
 
 function validate-config {
+    local changed_files
+    local changed_file
+    local restart_ignored_file
+    local restart_required_file
+
     bashio::log.info "[Info] Checking if something has changed..."
-    # Compare commit ids & check config
     NEW_COMMIT=$(git rev-parse HEAD)
     if [ "$NEW_COMMIT" == "$OLD_COMMIT" ]; then
         bashio::log.info "[Info] Nothing has changed."
@@ -189,15 +440,14 @@ function validate-config {
         return
     fi
     DO_RESTART="false"
-    CHANGED_FILES=$(git diff "$OLD_COMMIT" "$NEW_COMMIT" --name-only)
-    bashio::log.info "Changed Files: $CHANGED_FILES"
+    changed_files=$(git diff "$OLD_COMMIT" "$NEW_COMMIT" --name-only)
+    bashio::log.info "Changed Files: $changed_files"
     if [ -n "$RESTART_IGNORED_FILES" ]; then
-        for changed_file in $CHANGED_FILES; do
+        for changed_file in $changed_files; do
             restart_required_file=""
             for restart_ignored_file in $RESTART_IGNORED_FILES; do
                 bashio::log.info "[Info] Checking: $changed_file for $restart_ignored_file"
                 if [ -d "$restart_ignored_file" ]; then
-                    # file to be ignored is a whole dir
                     set +e
                     restart_required_file=$(echo "${changed_file}" | grep "^${restart_ignored_file}")
                     set -e
@@ -206,8 +456,9 @@ function validate-config {
                     restart_required_file=$(echo "${changed_file}" | grep "^${restart_ignored_file}$")
                     set -e
                 fi
-                # break on first match
-                if [ -n "$restart_required_file" ]; then break; fi
+                if [ -n "$restart_required_file" ]; then
+                    break
+                fi
             done
             if [ -z "$restart_required_file" ]; then
                 DO_RESTART="true"
@@ -228,22 +479,17 @@ function validate-config {
     fi
 }
 
-###################
-
-#### Main program ####
-cd /config || bashio::exit.nok "[Error] Failed to cd into /config";
+cd /config || bashio::exit.nok "[Error] Failed to cd into /config"
 
 while true; do
-    check-ssh-key
-    setup-user-password
-    if git-synchronize ; then
+    setup-ssh-auth
+    setup-https-auth
+    log-debug-state
+    if git-synchronize; then
         validate-config
     fi
-     # do we repeat?
-    if [ ! "$REPEAT_ACTIVE" == "true" ]; then
+    if [ "$REPEAT_ACTIVE" != "true" ]; then
         exit 0
     fi
     sleep "$REPEAT_INTERVAL"
 done
-
-###################
