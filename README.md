@@ -14,6 +14,7 @@ Recent authentication and reliability improvements include:
 - HTTPS auth via `deployment_user` + `deployment_password` (no token required in URL)
 - remote URL normalization and auto-repair for benign origin mismatches
 - optional `debug` mode with credential redaction
+- configurable apply mode: full restart or Home Assistant quick reload (`homeassistant.reload_all`)
 
 Local reproduction steps for key-format failures are in `REPRO.md`.
 
