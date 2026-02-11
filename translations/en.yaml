@@ -53,6 +53,12 @@ configuration:
     description: >-
       Enable additional diagnostics (auth mode, key validation status, remote
       details with credentials redacted).
+  config_apply_mode:
+    name: Config Apply Mode
+    description: >-
+      Choose how updated YAML is applied after a successful pull:
+      `restart` (full Home Assistant restart) or `quick_reload`
+      (`homeassistant.reload_all`).
   repeat:
     name: Polling
     description: >-

@@ -64,6 +64,7 @@ deployment_key:
   - "-----END RSA PRIVATE KEY-----"
 deployment_key_protocol: rsa
 debug: false
+config_apply_mode: restart
 ```
 
 ### Option: `git_remote` (required)
@@ -96,7 +97,18 @@ Git URL to your repository (make sure to use double quotes).
 
 ### Option: `auto_restart` (required)
 
-`true`/`false`: Restart Home Assistant when the configuration has changed (and is valid).
+`true`/`false`: Apply Home Assistant configuration when it has changed (and is valid). The apply behavior is selected by `config_apply_mode`.
+
+### Option: `config_apply_mode` (optional)
+
+How to apply changes when `auto_restart` is enabled:
+
+- `restart` (default): full Home Assistant restart.
+- `quick_reload`: trigger Home Assistant quick reload using the documented `homeassistant.reload_all` action.
+
+Quick reload reference:
+
+- [Home Assistant `homeassistant.reload_all` action](https://www.home-assistant.io/integrations/homeassistant/#action-homeassistantreload_all)
 
 ### Option: `restart_ignore` (optional)
 

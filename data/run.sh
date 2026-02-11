@@ -19,6 +19,7 @@ RESTART_IGNORED_FILES=$(bashio::config 'restart_ignore | join(" ")')
 REPEAT_ACTIVE=$(bashio::config 'repeat.active')
 REPEAT_INTERVAL=$(bashio::config 'repeat.interval')
 DEBUG_MODE=$(bashio::config 'debug')
+CONFIG_APPLY_MODE=$(bashio::config 'config_apply_mode')
 
 SSH_PERSIST_DIR="/data/ssh"
 SSH_RUNTIME_DIR="${HOME}/.ssh"
@@ -418,6 +419,21 @@ function git-synchronize {
     esac
 }
 
+function apply-homeassistant-config {
+    case "$CONFIG_APPLY_MODE" in
+        quick_reload)
+            bashio::log.info "[Info] Apply mode is quick_reload; triggering homeassistant.reload_all"
+            if ! bashio::api.supervisor POST "/core/api/services/homeassistant/reload_all" >/dev/null 2>&1; then
+                bashio::exit.nok "[Error] Quick reload failed (homeassistant.reload_all). Set config_apply_mode to restart to use a full restart."
+            fi
+            ;;
+        restart|*)
+            bashio::log.info "[Info] Apply mode is restart; restarting Home-Assistant"
+            bashio::core.restart
+            ;;
+    esac
+}
+
 function validate-config {
     local changed_files
     local changed_file
@@ -472,8 +488,7 @@ function validate-config {
     fi
 
     if [ "$DO_RESTART" == "true" ]; then
-        bashio::log.info "[Info] Restart Home-Assistant"
-        bashio::core.restart
+        apply-homeassistant-config
     else
         bashio::log.info "[Info] No Restart Required, only ignored changes detected"
     fi
