@@ -7,6 +7,16 @@ Load and update configuration files for Home Assistant from a Git repository.
 You can use this app (formerly known as add-on) to `git pull` updates to your Home Assistant configuration files from a Git
 repository.
 
+Recent authentication and reliability improvements include:
+
+- resilient `deployment_key` parsing for list-of-lines and block-scalar input
+- persistent SSH material in `/data/ssh` (key + `known_hosts`) across container recreation
+- HTTPS auth via `deployment_user` + `deployment_password` (no token required in URL)
+- remote URL normalization and auto-repair for benign origin mismatches
+- optional `debug` mode with credential redaction
+
+Local reproduction steps for key-format failures are in `REPRO.md`.
+
 [aarch64-shield]: https://img.shields.io/badge/aarch64-yes-green.svg
 [amd64-shield]: https://img.shields.io/badge/amd64-yes-green.svg
 [armhf-shield]: https://img.shields.io/badge/armhf-yes-green.svg
