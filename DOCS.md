@@ -63,6 +63,7 @@ deployment_key:
   - HgXRyIqIXHYk2+5w+N2eunURIBqCI9uWYK/r81TMR6V84R+XhtvM
   - "-----END RSA PRIVATE KEY-----"
 deployment_key_protocol: rsa
+debug: false
 ```
 
 ### Option: `git_remote` (required)
@@ -125,6 +126,28 @@ Password to use when authenticating to a repository.  Ignored if `deployment_use
 
 A private SSH key that will be used for communication during Git operations. This key is mandatory for ssh-accessed repositories, which are the ones with the following pattern: `<user>@<host>:<repository path>`. This key has to be created without a passphrase.
 
+Supported formats:
+
+1. List of lines (recommended and historically supported):
+
+```yaml
+deployment_key:
+  - "-----BEGIN OPENSSH PRIVATE KEY-----"
+  - b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAA...
+  - "-----END OPENSSH PRIVATE KEY-----"
+```
+
+2. Block scalar string (now supported and normalized safely):
+
+```yaml
+deployment_key: |-
+  -----BEGIN OPENSSH PRIVATE KEY-----
+  b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAA...
+  -----END OPENSSH PRIVATE KEY-----
+```
+
+The app validates the normalized key with `ssh-keygen` before writing it, and fails with an actionable error if the key is malformed.
+
 ### Option: `deployment_key_protocol` (optional)
 
 The key protocol. Default is `rsa`. Valid protocols are:
@@ -135,6 +158,98 @@ The key protocol. Default is `rsa`. Valid protocols are:
 - rsa
 
 The protocol is typically known by the suffix of the private key --e.g., a key file named `id_rsa` will be a private key using `rsa` protocol.
+
+### Option: `debug` (optional)
+
+`true`/`false`: Enable extra diagnostics with secrets redacted. Includes:
+
+- detected repo protocol/host/path
+- key storage location and validation status
+- known_hosts host-entry status
+- `git remote -v` values with credentials redacted
+
+## SSH persistence and host verification
+
+SSH state is persisted under `/data/ssh`:
+
+- `/data/ssh/id_<deployment_key_protocol>`
+- `/data/ssh/known_hosts`
+
+At startup, the app ensures `/root/.ssh` exists and links runtime files to the persistent data. For SSH repositories, host keys are loaded into `/data/ssh/known_hosts` using `ssh-keyscan` (with GitHub key types preselected for `github.com`).
+
+Host checking is explicit and safe by default:
+
+- `StrictHostKeyChecking yes`
+- non-interactive/batch mode enabled
+- no interactive trust prompt required
+
+## HTTPS authentication (without token in URL)
+
+For HTTPS repositories, set:
+
+- `deployment_user`
+- `deployment_password` (use your PAT here for GitHub)
+
+The app uses `GIT_ASKPASS` so credentials are supplied non-interactively without embedding secrets in the repository URL.
+
+Recommended:
+
+```yaml
+repository: "https://github.com/<org>/<repo>.git"
+deployment_user: "x-access-token"
+deployment_password: "<github_pat>"
+```
+
+Not recommended:
+
+```yaml
+repository: "https://x-access-token:<github_pat>@github.com/<org>/<repo>.git"
+```
+
+## Origin/remote matching behavior
+
+Remote comparison now normalizes common equivalent forms:
+
+- SSH vs HTTPS host/path equivalence
+- with/without `.git`
+- case normalization
+
+If a non-equivalent mismatch is detected, the app logs both current and desired values (redacted where needed), attempts to update the configured remote URL, and continues safely if successful.
+
+## Troubleshooting
+
+### `Load key "/root/.ssh/id_ed25519": error in libcrypto`
+
+- Cause: malformed private key content (often from folded YAML coercion).
+- Fix:
+1. Paste the key as list-of-lines or a `|-` block scalar.
+2. Ensure BEGIN/END markers are intact.
+3. Avoid passphrase-protected keys.
+4. Enable `debug: true` and confirm `SSH key validates: true`.
+
+### `Host key verification failed`
+
+- Cause: missing host entry in `known_hosts`.
+- Fix:
+1. Use SSH repo URL and restart app so host key is scanned into `/data/ssh/known_hosts`.
+2. Verify `debug` log shows `known_hosts entry for host: present`.
+3. If your network blocks `ssh-keyscan`, add host keys manually to `/data/ssh/known_hosts`.
+
+### `Permission denied (publickey)`
+
+- Cause: wrong key, wrong protocol, or missing repo access.
+- Fix:
+1. Set `deployment_key_protocol` to match your key type (for example `ed25519`).
+2. Verify deploy key/public key is attached to the repository.
+3. Confirm repository URL host/path matches the key's target repo.
+
+### Origin mismatch warnings
+
+- Cause: local remote URL and configured `repository` differ in a meaningful way.
+- Behavior:
+1. App logs current and desired remotes (with credentials redacted).
+2. App attempts `git remote set-url <remote> <repository>`.
+3. If update fails, app exits with a clear error.
 
 ## Support
 
