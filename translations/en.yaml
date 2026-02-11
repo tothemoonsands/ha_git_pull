@@ -34,7 +34,7 @@ configuration:
     name: Deployment Key
     description: >-
       A private SSH key that will be used for communication during Git
-      operations.
+      operations. Supports both list-of-lines and block-scalar string formats.
   deployment_user:
     name: Deployment User
     description: >-
@@ -48,6 +48,11 @@ configuration:
   deployment_key_protocol:
     name: Deployment Key Protocol
     description: The key protocol
+  debug:
+    name: Debug
+    description: >-
+      Enable additional diagnostics (auth mode, key validation status, remote
+      details with credentials redacted).
   repeat:
     name: Polling
     description: >-
