@@ -20,7 +20,7 @@ init: false
 map:
   - config:rw
 options:
-  repository: null
+  repository: ""
   git_branch: master
   git_remote: origin
   auto_restart: false
