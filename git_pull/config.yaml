@@ -15,7 +15,6 @@ boot: manual
 hassio_api: true
 homeassistant_api: true
 hassio_role: homeassistant
-image: ghcr.io/tothemoonsands/{arch}-addon-git_pull_tothemoonsands
 init: false
 map:
   - config:rw
