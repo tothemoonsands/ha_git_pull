@@ -1,4 +1,4 @@
-# TotheMoonSands Home Assistant Add-ons
+# Git Pull Home Assistant Add-ons
 
 Custom add-on repository for Home Assistant.
 
