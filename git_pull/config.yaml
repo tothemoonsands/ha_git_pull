@@ -28,7 +28,7 @@ options:
     - .gitignore
   git_command: pull
   git_prune: false
-  deployment_key: []
+  deployment_key: ""
   deployment_user: ""
   deployment_password: ""
   deployment_key_protocol: rsa
@@ -46,7 +46,7 @@ schema:
     - str
   git_command: list(pull|reset)
   git_prune: bool
-  deployment_key: any
+  deployment_key: str
   deployment_user: str
   deployment_password: password
   deployment_key_protocol: match(rsa|dsa|ecdsa|ed25519|rsa)
