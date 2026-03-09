@@ -1,5 +1,5 @@
 ---
-version: 8.0.2
+version: 8.0.3
 slug: git_pull_tothemoonsands
 name: Git pull
 description: Simple git pull to update the local configuration
