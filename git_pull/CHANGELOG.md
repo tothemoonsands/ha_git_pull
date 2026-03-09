@@ -1,5 +1,10 @@
 # Changelog
 
+## 8.0.2
+- Fix Supervisor schema parsing for `deployment_key`
+- Improve add-on discovery compatibility in forked repositories
+- Correct options schema defaults for `repository`
+
 ## 8.0.1
 - Fix bashio warn(ing) logger usage breaking deployment keys
 
