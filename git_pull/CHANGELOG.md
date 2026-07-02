@@ -1,5 +1,8 @@
 # Changelog
 
+## 8.0.4
+- Prevent transient git fetch failures from crashing the add-on
+
 ## 8.0.1
 - Fix bashio warn(ing) logger usage breaking deployment keys
 

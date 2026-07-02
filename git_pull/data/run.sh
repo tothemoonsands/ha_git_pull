@@ -385,9 +385,15 @@ function git-synchronize {
 
     bashio::log.info "[Info] Start git fetch..."
     if [ -z "$GIT_BRANCH" ]; then
-        git fetch "$GIT_REMOTE" || bashio::exit.nok "[Error] Git fetch failed"
+        if ! git fetch "$GIT_REMOTE"; then
+            bashio::log.error "[Error] Git fetch failed; leaving existing configuration unchanged"
+            return 1
+        fi
     else
-        git fetch "$GIT_REMOTE" "$GIT_BRANCH" || bashio::exit.nok "[Error] Git fetch failed"
+        if ! git fetch "$GIT_REMOTE" "$GIT_BRANCH"; then
+            bashio::log.error "[Error] Git fetch failed; leaving existing configuration unchanged"
+            return 1
+        fi
     fi
 
     if [ "$GIT_PRUNE" == "true" ]; then
