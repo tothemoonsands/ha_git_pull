@@ -41,6 +41,7 @@ App configuration:
 ```yaml
 git_branch: master
 git_command: pull
+reconcile_matching_changes: true
 git_remote: origin
 git_prune: 'false'
 repository: https://example.com/my_configs.git
@@ -85,11 +86,60 @@ Branch name of the Git repo. If left empty, the currently checked out branch wil
 
 - `pull`
   
-  - Incorporates changes from a remote repository into the current branch. Will preserve any local changes to tracked files.
+  - Fast-forwards to the fetched commit from `git_remote` / `git_branch`. Local commits are never merged or rebased automatically. Local edits are preserved; matching direct deployments can be reconciled as described below.
 
 - `reset`
   
   - Will execute `git reset --hard` and overwrite any local changes to tracked files and update from the remote repository. **Warning**: Using `reset` WILL overwrite changes to tracked files. You can list all tracked files with this command: `git ls-tree -r master --name-only`.
+
+### Option: `reconcile_matching_changes` (optional, default: `true`)
+
+In `pull` mode, recover automatically when directly deployed files block an update
+but their contents and tracked file modes already match the fetched commit.
+For example, a dashboard copied into `/config` before its Git commit was pushed
+can be reconciled once that same version reaches the configured remote branch.
+
+The app first attempts an ordinary fast-forward. If local edits block it, recovery
+requires that there are no staged changes and **every modified tracked path**
+matches the pinned fetched commit. It then:
+
+1. Saves tracked edits in a named Git stash, leaving untracked and ignored files alone.
+2. Retains that snapshot under `refs/git-pull/recovery/<snapshot-id>` in `/config/.git`,
+   so it survives container restarts and ordinary stash reflog expiration/pruning.
+3. Rechecks the saved snapshot and retries the same fetched commit without another fetch.
+4. Runs the existing Home Assistant config check and configured reload/restart on success.
+5. Attempts to restore the snapshot if the retry fails, retaining the recovery copy either way.
+
+Recovery never automatically reapplies the stash after success: those changes are
+already in the incoming commit. Existing user stashes are retained. Recovery refs
+are local only and are not automatically pushed or deleted.
+
+If any tracked edit differs from the incoming version, recovery defers the whole
+update. Staged changes, divergent local commits, unfinished Git operations, and
+untracked/ignored files that would be overwritten require manual review. When
+polling is enabled, a failed pull logs the reason and retries next cycle rather
+than stopping the app. In single-run mode a failed synchronization exits nonzero.
+Do not edit the checkout concurrently with a synchronization; if restoration is
+blocked by a new edit, the log identifies the retained snapshot for manual recovery.
+
+Set this option to `false` to disable automatic reconciliation. This option does
+not change the explicitly destructive behavior of `git_command: reset`.
+
+To inspect recovery copies from a terminal with access to `/config`:
+
+```bash
+git -C /config for-each-ref --format='%(refname)' refs/git-pull/recovery/
+git -C /config stash list
+# Substitute a recovery ref from the first command:
+git -C /config stash show --stat refs/git-pull/recovery/<snapshot-id>
+```
+
+For manual recovery, inspect the snapshot first. To extract the original state
+into a separate directory without changing the live configuration:
+
+```bash
+git -C /config worktree add --detach /share/git-pull-recovery refs/git-pull/recovery/<snapshot-id>
+```
 
 ### Option: `repository` (required)
 

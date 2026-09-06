@@ -20,6 +20,13 @@ REPEAT_ACTIVE=$(bashio::config 'repeat.active')
 REPEAT_INTERVAL=$(bashio::config 'repeat.interval')
 DEBUG_MODE=$(bashio::config 'debug')
 CONFIG_APPLY_MODE=$(bashio::config 'config_apply_mode')
+RECONCILE_MATCHING_CHANGES=$(bashio::config 'reconcile_matching_changes')
+if [ "$RECONCILE_MATCHING_CHANGES" != "false" ]; then
+    RECONCILE_MATCHING_CHANGES="true"
+fi
+
+# shellcheck source=git-reconcile.sh
+source "$(dirname "${BASH_SOURCE[0]}")/git-reconcile.sh"
 
 SSH_PERSIST_DIR="/data/ssh"
 SSH_RUNTIME_DIR="${HOME}/.ssh"
@@ -353,6 +360,7 @@ function git-synchronize {
     local current_git_remote_url
     local current_normalized
     local desired_normalized
+    local fetch_branch fetched_commit
 
     if ! git rev-parse --is-inside-work-tree &>/dev/null; then
         bashio::log.warning "[Warn] Git repository doesn't exist"
@@ -384,17 +392,18 @@ function git-synchronize {
     OLD_COMMIT=$(git rev-parse HEAD)
 
     bashio::log.info "[Info] Start git fetch..."
-    if [ -z "$GIT_BRANCH" ]; then
-        if ! git fetch "$GIT_REMOTE"; then
-            bashio::log.error "[Error] Git fetch failed; leaving existing configuration unchanged"
+    fetch_branch="$GIT_BRANCH"
+    if [ -z "$fetch_branch" ]; then
+        fetch_branch=$(git symbolic-ref --quiet --short HEAD) || {
+            bashio::log.error "[Error] Detached HEAD; configure or check out a branch before pulling."
             return 1
-        fi
-    else
-        if ! git fetch "$GIT_REMOTE" "$GIT_BRANCH"; then
-            bashio::log.error "[Error] Git fetch failed; leaving existing configuration unchanged"
-            return 1
-        fi
+        }
     fi
+    if ! git fetch "$GIT_REMOTE" "refs/heads/${fetch_branch}"; then
+        bashio::log.error "[Error] Git fetch failed; leaving existing configuration unchanged"
+        return 1
+    fi
+    fetched_commit=$(git rev-parse --verify 'FETCH_HEAD^{commit}') || return 1
 
     if [ "$GIT_PRUNE" == "true" ]; then
         bashio::log.info "[Info] Start git prune..."
@@ -406,14 +415,17 @@ function git-synchronize {
         bashio::log.info "[Info] Staying on currently checked out branch: $GIT_CURRENT_BRANCH..."
     else
         bashio::log.info "[Info] Switching branches - start git checkout of branch $GIT_BRANCH..."
-        git checkout "$GIT_BRANCH" || bashio::exit.nok "[Error] Git checkout failed"
+        if ! git checkout "$GIT_BRANCH"; then
+            bashio::log.error "[Error] Git checkout failed; leaving local changes for manual review."
+            return 1
+        fi
         GIT_CURRENT_BRANCH=$(git rev-parse --symbolic-full-name --abbrev-ref HEAD)
     fi
 
     case "$GIT_COMMAND" in
         pull)
             bashio::log.info "[Info] Start git pull..."
-            git pull || bashio::exit.nok "[Error] Git pull failed"
+            git-pull-fetched "$fetched_commit" "$RECONCILE_MATCHING_CHANGES" || return 1
             ;;
         reset)
             bashio::log.info "[Info] Start git reset..."
@@ -500,17 +512,28 @@ function validate-config {
     fi
 }
 
-cd /config || bashio::exit.nok "[Error] Failed to cd into /config"
+function main {
+    local sync_status
+    cd "${1:-/config}" || bashio::exit.nok "[Error] Failed to enter configuration directory"
 
-while true; do
-    setup-ssh-auth
-    setup-https-auth
-    log-debug-state
-    if git-synchronize; then
-        validate-config
-    fi
-    if [ "$REPEAT_ACTIVE" != "true" ]; then
-        exit 0
-    fi
-    sleep "$REPEAT_INTERVAL"
-done
+    while true; do
+        setup-ssh-auth
+        setup-https-auth
+        log-debug-state
+        sync_status=0
+        if git-synchronize; then
+            validate-config
+        else
+            sync_status=$?
+            bashio::log.warning "[Warn] Synchronization deferred; resolve any reported conflicts or let the next polling cycle retry."
+        fi
+        if [ "$REPEAT_ACTIVE" != "true" ]; then
+            exit "$sync_status"
+        fi
+        sleep "$REPEAT_INTERVAL"
+    done
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main
+fi

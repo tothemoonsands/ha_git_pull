@@ -5,6 +5,6 @@ FROM $BUILD_FROM
 RUN apk add --no-cache jq curl git openssh-client
 
 # Copy data
-COPY data/run.sh /
+COPY data/run.sh data/git-reconcile.sh /
 
 CMD [ "/run.sh" ]

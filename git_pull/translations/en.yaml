@@ -24,6 +24,12 @@ configuration:
   git_command:
     name: Git Command
     description: Command to run. Leave this as `pull` if you are unsure.
+  reconcile_matching_changes:
+    name: Reconcile matching direct edits
+    description: >-
+      When a pull is blocked, preserve a recovery snapshot and retry only if
+      every local tracked edit already matches the fetched commit. Different
+      or staged edits are left for manual review. Enabled by default.
   git_prune:
     name: Git Prune
     description: >-

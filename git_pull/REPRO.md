@@ -32,3 +32,20 @@ ssh-keygen -y -f <key_file>
 ```
 
 It also simulates runtime vs persistent `known_hosts` storage to show why `/data/ssh/known_hosts` survives container recreation.
+
+## Git reconciliation regression tests
+
+From the repository root:
+
+```bash
+python3 -m unittest discover -s git_pull/tests -v
+bash -n git_pull/data/run.sh git_pull/data/git-reconcile.sh
+```
+
+Requires Python 3, Bash and Git. These tests source the production recovery helper
+and use temporary bare remotes and checkouts. Integration cases run the real
+polling loop with Home Assistant calls stubbed out. They never connect to Home Assistant
+or GitHub and do not need credentials. Coverage includes matching direct edits,
+partial deployments with additional incoming files, unpublished edits that later
+match a push, staged changes, divergence, existing stashes, recovery-ref failures,
+concurrent edits, untracked/ignored collisions, and filenames with special characters.

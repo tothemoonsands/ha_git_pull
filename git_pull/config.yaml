@@ -1,5 +1,5 @@
 ---
-version: 8.0.4
+version: 8.0.5
 slug: git_pull_tothemoonsands
 name: Git pull
 description: Simple git pull to update the local configuration
@@ -27,6 +27,7 @@ options:
     - ui-lovelace.yaml
     - .gitignore
   git_command: pull
+  reconcile_matching_changes: true
   git_prune: false
   deployment_key: ""
   deployment_user: ""
@@ -45,6 +46,7 @@ schema:
   restart_ignore:
     - str
   git_command: list(pull|reset)
+  reconcile_matching_changes: bool?
   git_prune: bool
   deployment_key: str
   deployment_user: str

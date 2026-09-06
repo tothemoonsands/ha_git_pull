@@ -14,9 +14,11 @@ Recent authentication and reliability improvements include:
 - HTTPS auth via `deployment_user` + `deployment_password` (no token required in URL)
 - remote URL normalization and auto-repair for benign origin mismatches
 - optional `debug` mode with credential redaction
+- safe reconciliation of matching direct deployments with retained recovery snapshots
+- continued polling when a pull is blocked by conflicting local edits
 - configurable apply mode: full restart or Home Assistant quick reload (`homeassistant.reload_all`)
 
-Local reproduction steps for key-format failures are in `REPRO.md`.
+Local reproduction steps and Git recovery regression tests are in `REPRO.md`.
 
 [aarch64-shield]: https://img.shields.io/badge/aarch64-yes-green.svg
 [amd64-shield]: https://img.shields.io/badge/amd64-yes-green.svg

@@ -1,5 +1,11 @@
 # Changelog
 
+## 8.0.5
+- Reconcile directly deployed tracked edits only when they match the fetched commit, retaining Git recovery snapshots.
+- Preserve conflicting edits and keep polling after pull or branch-checkout failures.
+- Use a pinned fast-forward from the configured remote and branch; do not implicitly rebase, autostash, or overwrite ignored files.
+- Add isolated Git regression tests for successful recovery and refusal/restore paths.
+
 ## 8.0.4
 - Prevent transient git fetch failures from crashing the add-on
 
