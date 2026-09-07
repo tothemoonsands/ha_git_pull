@@ -95,6 +95,84 @@ source "$1"
         self.assertEqual(self.run_sync().returncode, 0)
         self.assertEqual(self.recovery_refs(), refs)
 
+    def automation_update(self):
+        initial = '- id: oven\n  action:\n  - service: notify.old\n'
+        self.incoming(**{'automations.yaml': initial})
+        self.git(self.checkout, 'merge', '--ff-only', 'FETCH_HEAD')
+        self.old = self.head()
+        published = initial.replace('notify.old', 'notify.new')
+        target = self.incoming(**{'automations.yaml': published})
+        live = published.replace('action:', 'actions:').replace('service:', 'action:')
+        (self.checkout / 'automations.yaml').write_text(live)
+        return target, published, live
+
+    def test_automation_editor_rewrite_heals_with_original_snapshot(self):
+        target, published, live = self.automation_update()
+        result = self.run_sync()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.head(), target)
+        self.assertEqual((self.checkout / 'automations.yaml').read_text(), published)
+        self.assertEqual(self.git(self.checkout, 'status', '--porcelain'), '')
+        refs = self.recovery_refs()
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(self.git(self.checkout, 'show', refs[0] + ':automations.yaml'), live.strip())
+        self.assertEqual(self.run_sync().returncode, 0)
+        self.assertEqual(self.recovery_refs(), refs)
+
+    def test_real_automation_change_is_preserved(self):
+        _, _, live = self.automation_update()
+        live = live.replace('notify.new', 'notify.local')
+        (self.checkout / 'automations.yaml').write_text(live)
+        self.assertNotEqual(self.run_sync().returncode, 0)
+        self.assertEqual(self.head(), self.old)
+        self.assertEqual((self.checkout / 'automations.yaml').read_text(), live)
+        self.assertEqual(self.recovery_refs(), [])
+
+    def test_automation_mode_change_is_not_hidden(self):
+        self.automation_update()
+        (self.checkout / 'automations.yaml').chmod(0o755)
+        self.assertNotEqual(self.run_sync().returncode, 0)
+        self.assertEqual(self.head(), self.old)
+
+    def test_automation_symlink_is_not_followed(self):
+        _, _, live = self.automation_update()
+        (self.checkout / 'private').write_text(live)
+        (self.checkout / 'automations.yaml').unlink()
+        (self.checkout / 'automations.yaml').symlink_to('private')
+        self.assertNotEqual(self.run_sync().returncode, 0)
+        self.assertEqual(self.head(), self.old)
+        self.assertTrue((self.checkout / 'automations.yaml').is_symlink())
+
+    def test_automation_snapshot_recheck_catches_concurrent_edit(self):
+        _, _, live = self.automation_update()
+        shim = '''git() {
+ if [[ "$1" == stash && "$2" == push ]]; then printf '\\n  alias: concurrent edit\\n' >> automations.yaml; fi
+ command git "$@"
+}'''
+        result = self.run_sync(shim=shim)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.head(), self.old)
+        self.assertEqual((self.checkout / 'automations.yaml').read_text(), live + '\n  alias: concurrent edit\n')
+        self.assertEqual(len(self.recovery_refs()), 1)
+
+    def test_equivalent_automation_failed_merge_restores_original(self):
+        _, _, live = self.automation_update()
+        shim = '''git() {
+ if [[ "$1" == merge ]] && command git rev-parse -q --verify refs/stash >/dev/null; then return 1; fi
+ command git "$@"
+}'''
+        result = self.run_sync(shim=shim)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.head(), self.old)
+        self.assertEqual((self.checkout / 'automations.yaml').read_text(), live)
+        self.assertEqual(len(self.recovery_refs()), 1)
+
+    def test_semantic_comparison_is_scoped_to_automations(self):
+        self.incoming(**{'dashboard.yaml': 'a: 1\nb: 2\n'})
+        (self.checkout / 'dashboard.yaml').write_text('b: 2\na: 1\n')
+        self.assertNotEqual(self.run_sync().returncode, 0)
+        self.assertEqual(self.head(), self.old)
+
     def test_unpublished_edit_defers_then_heals_after_push(self):
         self.incoming(**{'dashboard.yaml': 'remote version\n'})
         (self.checkout / 'dashboard.yaml').write_text('direct deployment\n')

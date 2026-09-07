@@ -42,10 +42,16 @@ python3 -m unittest discover -s git_pull/tests -v
 bash -n git_pull/data/run.sh git_pull/data/git-reconcile.sh
 ```
 
-Requires Python 3, Bash and Git. These tests source the production recovery helper
+Requires Python 3 with PyYAML, Bash and Git (the add-on image installs these).
+For a local environment, install PyYAML in a virtualenv and activate it before
+running the commands so the helper's `python3` uses the same environment.
+These tests source the production recovery helper
 and use temporary bare remotes and checkouts. Integration cases run the real
 polling loop with Home Assistant calls stubbed out. They never connect to Home Assistant
 or GitHub and do not need credentials. Coverage includes matching direct edits,
 partial deployments with additional incoming files, unpublished edits that later
 match a push, staged changes, divergence, existing stashes, recovery-ref failures,
 concurrent edits, untracked/ignored collisions, and filenames with special characters.
+Automation cases cover editor formatting and supported syntax aliases, exact
+snapshot retention, real value changes, scalar types, duplicate keys, unsupported
+tags/aliases, nested action changes, file modes, symlinks and rollback.

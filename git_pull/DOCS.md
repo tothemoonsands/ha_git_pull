@@ -96,6 +96,8 @@ Branch name of the Git repo. If left empty, the currently checked out branch wil
 
 In `pull` mode, recover automatically when directly deployed files block an update
 but their contents and tracked file modes already match the fetched commit.
+For `automations.yaml` only, equivalent YAML formatting and supported Home Assistant
+syntax aliases also count as a match (see below).
 For example, a dashboard copied into `/config` before its Git commit was pushed
 can be reconciled once that same version reaches the configured remote branch.
 
@@ -114,11 +116,29 @@ Recovery never automatically reapplies the stash after success: those changes ar
 already in the incoming commit. Existing user stashes are retained. Recovery refs
 are local only and are not automatically pushed or deleted.
 
+Home Assistant's automation editor can rewrite the entire `automations.yaml` file
+when saving one automation. Since 8.0.6, recovery compares its parsed YAML while
+ignoring comments, quoting style and structural mapping-key order. It also recognizes the
+top-level `trigger`/`triggers`, `condition`/`conditions`, `action`/`actions` aliases,
+`platform`/`trigger` in trigger lists, and `service`/`action` in action blocks
+(including choose, repeat and conditional sequences). User data and variables
+are never renamed, and their mapping order is preserved (variable evaluation can
+depend on it). Scalar types, decoded string/template content, sequence order,
+and file modes must still match. The fetched file's formatting becomes the live
+version, with the original formatting/comments retained in the recovery snapshot.
+
+This is deliberately not a general YAML merge: unsupported custom tags, YAML
+aliases/merge keys, duplicate or ambiguous keys, symlinks, and oversized/overly
+complex YAML require review. Other files still require an exact match. An actual
+automation change is never resolved by choosing the remote or local version.
+
 If any tracked edit differs from the incoming version, recovery defers the whole
 update. Staged changes, divergent local commits, unfinished Git operations, and
 untracked/ignored files that would be overwritten require manual review. When
 polling is enabled, a failed pull logs the reason and retries next cycle rather
-than stopping the app. In single-run mode a failed synchronization exits nonzero.
+than stopping the app. Retrying unchanged conflicting versions cannot resolve
+them: publish the intended live edit or reconcile it with the incoming change.
+In single-run mode a failed synchronization exits nonzero.
 Do not edit the checkout concurrently with a synchronization; if restoration is
 blocked by a new edit, the log identifies the retained snapshot for manual recovery.
 

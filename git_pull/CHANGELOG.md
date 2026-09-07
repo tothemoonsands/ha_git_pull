@@ -1,5 +1,11 @@
 # Changelog
 
+## 8.0.6
+- Recover from automation editor YAML rewrites when all automation values match the fetched commit, allowing supported Home Assistant syntax aliases.
+- Preserve exact original files in recovery snapshots and recheck equivalence after saving; continue to defer real or ambiguous changes.
+- Clarify that polling unchanged conflicting edits requires resolution or publication.
+- Add Python/PyYAML and regression coverage for automation equivalence, concurrent changes and rollback.
+
 ## 8.0.5
 - Reconcile directly deployed tracked edits only when they match the fetched commit, retaining Git recovery snapshots.
 - Preserve conflicting edits and keep polling after pull or branch-checkout failures.

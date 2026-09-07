@@ -15,6 +15,7 @@ Recent authentication and reliability improvements include:
 - remote URL normalization and auto-repair for benign origin mismatches
 - optional `debug` mode with credential redaction
 - safe reconciliation of matching direct deployments with retained recovery snapshots
+- recovery from equivalent `automations.yaml` formatting and syntax rewrites by the automation editor
 - continued polling when a pull is blocked by conflicting local edits
 - configurable apply mode: full restart or Home Assistant quick reload (`homeassistant.reload_all`)
 
