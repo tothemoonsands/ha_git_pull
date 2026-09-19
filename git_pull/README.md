@@ -18,6 +18,7 @@ Recent authentication and reliability improvements include:
 - recovery from equivalent `automations.yaml` formatting and syntax rewrites by the automation editor
 - continued polling when a pull is blocked by conflicting local edits
 - configurable apply mode: full restart or Home Assistant quick reload (`homeassistant.reload_all`)
+- persisted synchronization status in `/share/git_pull_status.json` for dashboards and automations
 
 Local reproduction steps and Git recovery regression tests are in `REPRO.md`.
 

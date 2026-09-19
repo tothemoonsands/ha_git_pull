@@ -1,5 +1,10 @@
 # Changelog
 
+## 8.1.0
+- Publish atomic synchronization status to `/share/git_pull_status.json` for Home Assistant dashboards and automations.
+- Report real workflow phases, phase-based progress, timestamps, commits, changed files, apply behavior and failures.
+- Preserve the final result across Home Assistant restarts instead of requiring add-on log access.
+
 ## 8.0.6
 - Recover from automation editor YAML rewrites when all automation values match the fetched commit, allowing supported Home Assistant syntax aliases.
 - Preserve exact original files in recovery snapshots and recheck equivalence after saving; continue to defer real or ambiguous changes.

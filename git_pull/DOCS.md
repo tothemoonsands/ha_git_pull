@@ -30,6 +30,37 @@ there were no errors are: `[Info] Nothing has changed.`,
 `[Info] Something has changed, checking Home-Assistant config...`,
 or `[Info] Local configuration has changed. Restart required.`.
 
+The app also publishes its latest synchronization state atomically to
+`/share/git_pull_status.json`. The file persists when Home Assistant or the app
+restarts and includes the current phase, phase-based progress, timestamps,
+before/after commits, changed files, apply behavior and any final error. It is
+intended for command-line sensors, dashboards and automations; progress reflects
+workflow milestones rather than Git transfer bytes.
+
+Example completed status:
+
+```json
+{
+  "schema_version": 1,
+  "state": "updated",
+  "phase": "complete",
+  "progress": 100,
+  "message": "Configuration updated; Home Assistant restart required",
+  "result": "restart_required",
+  "error": null,
+  "started_at": "2026-09-19T20:14:22Z",
+  "updated_at": "2026-09-19T20:14:25Z",
+  "completed_at": "2026-09-19T20:14:25Z",
+  "duration_seconds": 3,
+  "old_commit": "0123456789abcdef",
+  "new_commit": "fedcba9876543210",
+  "changed_files": ["dashboards/dashboard.yaml"],
+  "changed_file_count": 1,
+  "apply_mode": "restart",
+  "apply_action": "restart_required"
+}
+```
+
 If you made it this far, you might want to let the app automatically
 check for updates by setting the `active` field (a subfield of `repeat`)
 to `true` and turning on "Start on boot."

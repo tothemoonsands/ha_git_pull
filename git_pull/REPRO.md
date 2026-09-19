@@ -39,7 +39,7 @@ From the repository root:
 
 ```bash
 python3 -m unittest discover -s git_pull/tests -v
-bash -n git_pull/data/run.sh git_pull/data/git-reconcile.sh
+bash -n git_pull/data/run.sh git_pull/data/git-reconcile.sh git_pull/data/status.sh
 ```
 
 Requires Python 3 with PyYAML, Bash and Git (the add-on image installs these).

@@ -5,6 +5,6 @@ FROM $BUILD_FROM
 RUN apk add --no-cache jq curl git openssh-client python3 py3-yaml
 
 # Copy data
-COPY data/run.sh data/git-reconcile.sh data/automation-equivalent.py /
+COPY data/run.sh data/git-reconcile.sh data/status.sh data/automation-equivalent.py /
 
 CMD [ "/run.sh" ]

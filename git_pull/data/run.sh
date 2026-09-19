@@ -27,6 +27,8 @@ fi
 
 # shellcheck source=git-reconcile.sh
 source "$(dirname "${BASH_SOURCE[0]}")/git-reconcile.sh"
+# shellcheck source=status.sh
+source "$(dirname "${BASH_SOURCE[0]}")/status.sh"
 
 SSH_PERSIST_DIR="/data/ssh"
 SSH_RUNTIME_DIR="${HOME}/.ssh"
@@ -368,6 +370,7 @@ function git-synchronize {
         return
     fi
 
+    status-publish "syncing" "inspecting" 15 "Inspecting the local repository"
     bashio::log.info "[Info] Local git repository exists"
 
     current_git_remote_url=$(git remote get-url --all "$GIT_REMOTE" | head -n 1)
@@ -391,6 +394,7 @@ function git-synchronize {
 
     OLD_COMMIT=$(git rev-parse HEAD)
 
+    status-publish "syncing" "fetching" 35 "Fetching ${GIT_REMOTE}/${GIT_BRANCH:-current branch}"
     bashio::log.info "[Info] Start git fetch..."
     fetch_branch="$GIT_BRANCH"
     if [ -z "$fetch_branch" ]; then
@@ -404,6 +408,7 @@ function git-synchronize {
         return 1
     fi
     fetched_commit=$(git rev-parse --verify 'FETCH_HEAD^{commit}') || return 1
+    status-set-commits "$OLD_COMMIT" "$fetched_commit"
 
     if [ "$GIT_PRUNE" == "true" ]; then
         bashio::log.info "[Info] Start git prune..."
@@ -424,10 +429,12 @@ function git-synchronize {
 
     case "$GIT_COMMAND" in
         pull)
+            status-publish "syncing" "applying" 60 "Applying fetched configuration"
             bashio::log.info "[Info] Start git pull..."
             git-pull-fetched "$fetched_commit" "$RECONCILE_MATCHING_CHANGES" || return 1
             ;;
         reset)
+            status-publish "syncing" "applying" 60 "Resetting to fetched configuration"
             bashio::log.info "[Info] Start git reset..."
             git reset --hard "$GIT_REMOTE"/"$GIT_CURRENT_BRANCH" || bashio::exit.nok "[Error] Git reset failed"
             ;;
@@ -460,17 +467,24 @@ function validate-config {
 
     bashio::log.info "[Info] Checking if something has changed..."
     NEW_COMMIT=$(git rev-parse HEAD)
+    status-set-commits "$OLD_COMMIT" "$NEW_COMMIT"
     if [ "$NEW_COMMIT" == "$OLD_COMMIT" ]; then
         bashio::log.info "[Info] Nothing has changed."
+        status-complete "up_to_date" "no_changes" "Configuration is already up to date"
         return
     fi
+    status-set-changed-files "$OLD_COMMIT" "$NEW_COMMIT"
+    status-publish "syncing" "validating" 75 "Validating updated Home Assistant configuration"
     bashio::log.info "[Info] Something has changed, checking Home-Assistant config..."
     if ! bashio::core.check; then
         bashio::log.error "[Error] Configuration updated but it does not pass the config check. Do not restart until this is fixed!"
-        return
+        status-fail "Configuration validation failed" "The fetched configuration did not pass the Home Assistant config check."
+        return 1
     fi
     if [ "$AUTO_RESTART" != "true" ]; then
         bashio::log.info "[Info] Local configuration has changed. Restart required."
+        STATUS_APPLY_ACTION="restart_required"
+        status-complete "updated" "restart_required" "Configuration updated; Home Assistant restart required"
         return
     fi
     DO_RESTART="false"
@@ -506,9 +520,14 @@ function validate-config {
     fi
 
     if [ "$DO_RESTART" == "true" ]; then
+        STATUS_APPLY_ACTION="$CONFIG_APPLY_MODE"
+        status-publish "syncing" "applying_configuration" 90 "Applying configuration in Home Assistant"
         apply-homeassistant-config
+        status-complete "updated" "applied" "Configuration updated and applied"
     else
         bashio::log.info "[Info] No Restart Required, only ignored changes detected"
+        STATUS_APPLY_ACTION="not_required"
+        status-complete "updated" "no_restart_required" "Configuration updated; no restart required"
     fi
 }
 
@@ -517,15 +536,23 @@ function main {
     cd "${1:-/config}" || bashio::exit.nok "[Error] Failed to enter configuration directory"
 
     while true; do
+        status-begin
+        trap 'status-handle-exit "$?"' EXIT
+        status-publish "syncing" "authenticating" 10 "Preparing repository authentication"
         setup-ssh-auth
         setup-https-auth
         log-debug-state
         sync_status=0
         if git-synchronize; then
-            validate-config
+            if validate-config; then
+                sync_status=0
+            else
+                sync_status=$?
+            fi
         else
             sync_status=$?
             bashio::log.warning "[Warn] Synchronization deferred; resolve any reported conflicts or let the next polling cycle retry."
+            status-fail "Synchronization deferred" "Git could not safely apply the fetched configuration. Check the add-on logs for details."
         fi
         if [ "$REPEAT_ACTIVE" != "true" ]; then
             exit "$sync_status"

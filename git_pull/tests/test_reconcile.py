@@ -1,4 +1,5 @@
 """Exercise production reconciliation against real, isolated Git repositories."""
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -342,7 +343,7 @@ class AddonLoopTests(unittest.TestCase):
     incoming = ReconcileTests.incoming
     head = ReconcileTests.head
     # Run only the integration tests here; unit cases remain on ReconcileTests.
-    def run_addon(self, repeat='false', remote='origin'):
+    def run_addon(self, repeat='false', remote='origin', config_check=0):
         run_script = HELPER.with_name('run.sh')
         command = r"""
 set -euo pipefail
@@ -362,7 +363,7 @@ bashio::log.info() { printf '%s\n' "$*"; }
 bashio::log.warning() { printf '%s\n' "$*"; }
 bashio::log.error() { printf '%s\n' "$*"; }
 bashio::exit.nok() { printf '%s\n' "$*"; exit 99; }
-bashio::core.check() { echo CONFIG_CHECK; }
+bashio::core.check() { echo CONFIG_CHECK; return "$TEST_CONFIG_CHECK"; }
 source "$1"
 setup-ssh-auth() { :; }
 setup-https-auth() { :; }
@@ -371,9 +372,15 @@ sleep() { cycles=$((cycles + 1)); if [ "$cycles" -ge 2 ]; then exit 0; fi; }
 main "$2"
 """
         repo = self.git(self.checkout, 'remote', 'get-url', remote)
-        env = dict(self.env, TEST_REPEAT=repeat, TEST_REMOTE=remote, TEST_REPOSITORY=repo)
+        env = dict(self.env, TEST_REPEAT=repeat, TEST_REMOTE=remote,
+                   TEST_REPOSITORY=repo,
+                   TEST_CONFIG_CHECK=str(config_check),
+                   GIT_PULL_STATUS_PATH=str(self.root / 'git_pull_status.json'))
         return subprocess.run(['bash', '-c', command, 'test', str(run_script), str(self.checkout)],
                               env=env, cwd=self.checkout, capture_output=True, text=True)
+
+    def status(self):
+        return json.loads((self.root / 'git_pull_status.json').read_text())
 
     def test_loop_retries_a_conflict_without_crashing(self):
         self.incoming(**{'dashboard.yaml': 'published\n'})
@@ -390,6 +397,14 @@ main "$2"
         result = self.run_addon()
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertNotIn('CONFIG_CHECK', result.stdout)
+        status = self.status()
+        self.assertEqual(status['schema_version'], 1)
+        self.assertEqual(status['state'], 'failed')
+        self.assertEqual(status['phase'], 'applying')
+        self.assertEqual(status['progress'], 60)
+        self.assertEqual(status['result'], 'failed')
+        self.assertTrue(status['error'])
+        self.assertIsNotNone(status['completed_at'])
 
     def test_recovery_still_validates_changed_configuration(self):
         target = self.incoming(**{'dashboard.yaml': 'published\n'})
@@ -398,6 +413,41 @@ main "$2"
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.head(), target)
         self.assertIn('CONFIG_CHECK', result.stdout)
+        status = self.status()
+        self.assertEqual(status['state'], 'updated')
+        self.assertEqual(status['phase'], 'complete')
+        self.assertEqual(status['progress'], 100)
+        self.assertEqual(status['result'], 'restart_required')
+        self.assertEqual(status['apply_action'], 'restart_required')
+        self.assertEqual(status['old_commit'], self.old)
+        self.assertEqual(status['new_commit'], target)
+        self.assertEqual(status['changed_files'], ['dashboard.yaml'])
+        self.assertEqual(status['changed_file_count'], 1)
+        self.assertIsInstance(status['duration_seconds'], int)
+
+    def test_no_change_reports_up_to_date(self):
+        result = self.run_addon()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        status = self.status()
+        self.assertEqual(status['state'], 'up_to_date')
+        self.assertEqual(status['result'], 'no_changes')
+        self.assertEqual(status['progress'], 100)
+        self.assertEqual(status['old_commit'], self.old)
+        self.assertEqual(status['new_commit'], self.old)
+        self.assertEqual(status['changed_files'], [])
+
+    def test_config_check_failure_reports_failed(self):
+        target = self.incoming(**{'dashboard.yaml': 'invalid configuration\n'})
+        result = self.run_addon(config_check=1)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(self.head(), target)
+        status = self.status()
+        self.assertEqual(status['state'], 'failed')
+        self.assertEqual(status['phase'], 'validating')
+        self.assertEqual(status['progress'], 75)
+        self.assertEqual(status['result'], 'failed')
+        self.assertIn('config check', status['error'])
+        self.assertEqual(status['changed_files'], ['dashboard.yaml'])
 
     def test_configured_remote_wins_over_branch_upstream(self):
         deployment = self.root / 'deployment.git'
